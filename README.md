@@ -131,4 +131,4 @@ The original license is retained in [LICENSE](LICENSE). See
 
 ## Author
 
-LongQz · 重庆邮电大学计算机科学与技术
+LongQz
