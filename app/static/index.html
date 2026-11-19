@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LumenPilot · 运营分析工作台</title>
+  <link rel="stylesheet" href="/console/styles.css">
+</head>
+<body>
+  <div id="toast" class="toast" role="status"></div>
+
+  <section id="authScreen" class="auth-screen">
+    <div class="auth-glow auth-glow-a"></div>
+    <div class="auth-glow auth-glow-b"></div>
+    <div class="auth-story">
+      <a class="brand brand-light" href="/console/">
+        <span class="brand-mark">LP</span>
+        <span><b>LumenPilot</b><small>LumaFeed Operations Agent</small></span>
+      </a>
+      <div class="story-copy">
+        <span class="eyebrow">OPERATIONS INTELLIGENCE</span>
+        <h1>从内容数据到可执行任务，<br>让每次运营判断都有依据。</h1>
+        <p>连接内容指标、商户口碑和运营知识库。分析、引用、人工确认，最后一次完成。</p>
+      </div>
+      <div class="story-metrics">
+        <div><b>指标查询</b><span>用户 / 笔记 / 互动趋势</span></div>
+        <div><b>口碑排查</b><span>低分高评论商户定位</span></div>
+        <div><b>知识检索</b><span>运营手册与复盘规范</span></div>
+      </div>
+    </div>
+
+    <div class="auth-card-wrap">
+      <div class="auth-card">
+        <div class="auth-heading">
+          <span class="eyebrow">WELCOME BACK</span>
+          <h2>进入运营工作台</h2>
+          <p>普通用户可使用分析助手，管理员额外拥有平台测试面板。</p>
+        </div>
+        <div class="auth-tabs">
+          <button id="loginTab" class="active" type="button">账号登录</button>
+          <button id="registerTab" type="button">注册用户</button>
+        </div>
+        <form id="loginForm" class="auth-form">
+          <label>邮箱<input id="loginEmail" type="email" autocomplete="username" placeholder="name@company.com"></label>
+          <label>密码<input id="loginPassword" type="password" autocomplete="current-password" placeholder="请输入密码"></label>
+          <button class="button primary" type="submit">登录</button>
+        </form>
+        <form id="registerForm" class="auth-form hidden">
+          <label>邮箱<input id="registerEmail" type="email" autocomplete="username" placeholder="name@company.com"></label>
+          <label>显示名称<input id="registerUsername" autocomplete="nickname" placeholder="例如：内容运营 qzh"></label>
+          <label>密码<input id="registerPassword" type="password" autocomplete="new-password" placeholder="测试环境可填 qzh；生产需强密码"></label>
+          <button class="button primary" type="submit">创建普通用户</button>
+        </form>
+        <p id="authError" class="form-error"></p>
+        <div class="test-accounts">
+          <div><span>测试管理员</span><button type="button" data-test-email="admin.qzh@lumafeed.local" data-test-password="qzh">秦子豪管理员</button></div>
+          <div><span>运营管理员</span><button type="button" data-test-email="admin.ops@lumafeed.local" data-test-password="qzh">运营管理员</button></div>
+          <div><span>审计管理员</span><button type="button" data-test-email="admin.audit@lumafeed.local" data-test-password="qzh">审计管理员</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div id="workspace" class="workspace hidden">
+    <aside class="sidebar">
+      <a class="brand" href="/console/">
+        <span class="brand-mark">LP</span>
+        <span><b>LumenPilot</b><small>运营分析工作台</small></span>
+      </a>
+      <nav class="side-nav">
+        <button class="nav-item active" data-view="chat" type="button">
+          <span class="nav-icon">01</span><span>智能分析<small>Agent 对话与任务确认</small></span>
+        </button>
+        <button id="adminNav" class="nav-item hidden" data-view="admin" type="button">
+          <span class="nav-icon">02</span><span>管理控制台<small>账号 / 任务 / 指标</small></span>
+        </button>
+        <a class="nav-item" href="/docs" target="_blank">
+          <span class="nav-icon">API</span><span>接口文档<small>Swagger 调试入口</small></span>
+        </a>
+      </nav>
+      <div class="sidebar-note">
+        <span>运行状态</span>
+        <b><i id="healthDot" class="dot"></i><span id="healthText">检测中</span></b>
+        <small>LumaFeed 数据连接与 Agent 服务</small>
+      </div>
+      <div class="account-box">
+        <div class="account-avatar" id="accountAvatar">Q</div>
+        <div><b id="accountName">当前用户</b><small id="accountRole">USER</small></div>
+        <button id="logoutButton" title="退出登录" type="button">退出</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div><span id="pageKicker">OPERATIONS COPILOT</span><h1 id="pageTitle">智能分析</h1></div>
+        <div class="top-actions">
+          <span class="service-pill"><i class="dot"></i>本地测试环境</span>
+          <button id="refreshButton" class="icon-button" title="刷新" type="button">↻</button>
+        </div>
+      </header>
+
+      <section id="chatView" class="view active">
+        <div class="chat-layout">
+          <aside class="session-panel">
+            <div class="section-title"><span>当前会话</span><b id="sessionShort">尚未创建</b></div>
+            <div class="session-card active">
+              <span class="session-mark">A</span>
+              <div><b id="sessionName">运营分析会话</b><small id="sessionIdText">登录后自动创建</small></div>
+            </div>
+            <button id="newSessionButton" class="button ghost full" type="button">+ 新建会话</button>
+            <div class="prompt-library">
+              <span>快速测试</span>
+              <button type="button" data-prompt="查询最近7天 LumaFeed 的笔记、点赞和评论数据，检索运营手册，并按数据事实、原因分析、建议动作回答。不要创建任务。">平台数据分析</button>
+              <button type="button" data-prompt="查询当前商户口碑风险，重点指出低分且评论量高的商户，并给出排查建议。不要创建任务。">商户口碑风险</button>
+              <button type="button" data-prompt="检索运营手册中关于商户口碑风险的处理流程，并给出来源。">知识库检索</button>
+              <button type="button" data-prompt="根据当前高风险商户口碑情况创建一条专项回访任务，先给我确认，不要直接创建。">测试人工确认</button>
+            </div>
+          </aside>
+
+          <section class="conversation">
+            <div class="conversation-head">
+              <div><span class="eyebrow">LUMENPILOT AGENT</span><h2>把运营问题交给分析助手</h2></div>
+              <button id="clearChatButton" class="text-button" type="button">清空对话</button>
+            </div>
+            <div id="messageList" class="message-list">
+              <article class="message assistant">
+                <div class="message-avatar">LP</div>
+                <div class="message-body">
+                  <span>LumenPilot</span>
+                  <p>你好，我可以查询 LumaFeed 指标、定位商户口碑风险、检索运营知识，并在你明确确认后创建运营任务。</p>
+                </div>
+              </article>
+            </div>
+            <form id="chatForm" class="composer">
+              <textarea id="chatInput" rows="3" maxlength="3000" placeholder="输入运营问题，例如：查询最近7天数据并分析商户口碑风险"></textarea>
+              <div class="composer-foot">
+                <small>Enter 发送 · Shift + Enter 换行</small>
+                <button id="sendButton" class="button primary" type="submit">发送分析</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="adminView" class="view">
+        <div id="adminNotice" class="admin-notice hidden"></div>
+        <div class="metric-grid">
+          <article class="metric-card"><span>账号总数</span><b id="metricAccounts">--</b><small>LumenPilot 独立账号表</small></article>
+          <article class="metric-card"><span>管理员</span><b id="metricAdmins">--</b><small>具备控制台访问权限</small></article>
+          <article class="metric-card"><span>会话数量</span><b id="metricSessions">--</b><small>PostgreSQL 持久化会话</small></article>
+          <article class="metric-card accent"><span>待处理任务</span><b id="metricTasks">--</b><small>LumaFeed 运营任务</small></article>
+        </div>
+
+        <div class="admin-grid">
+          <section class="admin-panel">
+            <div class="panel-head"><div><span class="eyebrow">ACCOUNTS</span><h2>账号与角色</h2></div><button class="text-button" data-admin-load="users" type="button">刷新</button></div>
+            <div class="table-wrap"><table><thead><tr><th>账号</th><th>邮箱</th><th>角色</th><th>最近登录</th></tr></thead><tbody id="userTableBody"></tbody></table></div>
+          </section>
+          <section class="admin-panel">
+            <div class="panel-head"><div><span class="eyebrow">OPERATIONS</span><h2>运营任务</h2></div><button class="text-button" data-admin-load="tasks" type="button">刷新</button></div>
+            <div id="taskList" class="task-list"></div>
+          </section>
+          <section class="admin-panel wide">
+            <div class="panel-head"><div><span class="eyebrow">PLATFORM SNAPSHOT</span><h2>最近 7 天平台数据</h2></div><button class="text-button" data-admin-load="metrics" type="button">读取指标</button></div>
+            <div id="metricsSnapshot" class="snapshot-grid"><p class="empty-state">点击“读取指标”调用 LumaFeed 聚合接口。</p></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/console/app.js?v=20261120-1"></script>
+</body>
+</html>
