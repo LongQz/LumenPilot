@@ -1,5 +1,6 @@
 # LumenPilot
 
+[![Version](https://img.shields.io/badge/version-2.0.0-146b52)](docs/VERSION-2.md)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.121-009688)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1c3c3c)](https://langchain-ai.github.io/langgraph/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)](https://github.com/pgvector/pgvector)
@@ -7,6 +8,10 @@
 LumenPilot 是面向 LumaFeed 本地生活内容平台的运营分析 Agent。它通过
 只读接口获取内容互动、热门笔记和商户口碑指标，结合 Embedding + pgvector
 运营知识检索生成带来源的分析，并在人工确认后创建运营任务。
+
+当前公开版本为 **v2.0.0**。第二版重点补上 Reflexion 风格质量门、Prompt
+Injection 防护、工具权限和可视化质量结果，完整演进记录见
+[docs/VERSION-2.md](docs/VERSION-2.md)。
 
 ## 项目矩阵
 
@@ -16,16 +21,35 @@ LumenPilot 是面向 LumaFeed 本地生活内容平台的运营分析 Agent。�
 
 ## 核心流程
 
-![LumenPilot LangGraph](docs/generated/langgraph-agent.png)
+自动生成的 Mermaid 与 ASCII 流程图：
+[docs/generated/langgraph-agent.md](docs/generated/langgraph-agent.md)
 
 ```text
 运营人员提问
+→ 输入安全门
 → LumaFeed 聚合指标工具
+→ 工具权限门
 → 运营知识检索工具
 → 带来源的分析报告
+→ Reflection 质量检查
 → 人工确认
 → 创建 LumaFeed 运营任务
 ```
+
+## Reflection 与 AI 安全
+
+Agent 在模型调用前后增加确定性安全与质量边界：
+
+- 输入侧拦截 Prompt Injection、越权指令、超长输入，并对手机号、邮箱和 Token 脱敏。
+- 工具侧使用白名单校验，创建任务的写工具必须具备用户明确意图，禁止误触发。
+- RAG 文档和模型输出执行不可信内容过滤，检索内容不会被当作系统指令执行。
+- Reflection 使用确定性质量规则检查事实引用、工具调用和回答完整性；首次未通过时最多带反馈重试一次。
+- 控制台会在每条助手回答下显示“质量检查通过 / 已自动修正 / 质量检查未通过”，便于直接观察 Reflection 结果。
+- 安全审计只记录输入哈希与拦截类别，不把原始敏感文本写入日志。
+
+这是生产环境常见的“确定性 Guardrail + 一次 Reflection 重试”，不是重新训练模型，
+也不会让模型无限自我反思。实现边界与测试结果见
+[docs/ai-safety-and-reflection.md](docs/ai-safety-and-reflection.md)。
 
 ## 已实现工具
 
@@ -109,6 +133,8 @@ Mermaid 和 ASCII 图仍会保留，不会影响 Agent 启动。
 - LumenPilot 使用服务端令牌调用固定分析接口，模型看不到服务令牌。
 - 所有写操作必须经过明确的人工确认。
 - 检索到的运营文档只作为业务资料，不作为系统指令执行。
+- 被输入安全门拦截的请求不会继续调用 LLM 或工具。
+- 工具调用、Reflection 结果和安全拦截均写入结构化审计日志与 Prometheus 指标。
 
 ## 项目结构
 

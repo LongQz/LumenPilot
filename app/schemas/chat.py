@@ -67,6 +67,17 @@ class ChatRequest(BaseModel):
     )
 
 
+class ReflectionTrace(BaseModel):
+    """Deterministic quality-gate result for the latest assistant answer."""
+
+    status: Literal["not_run", "retry", "passed", "corrected", "unresolved"] = Field(
+        default="not_run",
+        description="Reflection quality-gate outcome",
+    )
+    attempts: int = Field(default=0, ge=0, description="Number of corrective retries")
+    reason: str = Field(default="", description="Why the answer was retried or could not be accepted")
+
+
 class ChatResponse(BaseResponse):
     """Response model for chat endpoint.
 
@@ -75,6 +86,10 @@ class ChatResponse(BaseResponse):
     """
 
     messages: List[Message] = Field(..., description="List of messages in the conversation")
+    reflection: ReflectionTrace = Field(
+        default_factory=ReflectionTrace,
+        description="Quality-gate status for the latest assistant answer",
+    )
 
 
 class StreamResponse(BaseResponse):

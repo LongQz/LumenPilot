@@ -4,6 +4,7 @@ import json
 
 from langchain_core.tools import tool
 
+from app.core.ai_safety import inspect_user_input
 from app.services.knowledge import knowledge_service
 
 
@@ -18,4 +19,12 @@ def search_ops_knowledge(query: str, limit: int = 3) -> str:
         query: 运营问题或检索关键词。
         limit: 返回片段数量，服务端会限制到 1～5。
     """
-    return json.dumps(knowledge_service.search(query, limit), ensure_ascii=False)
+    safe_results = []
+    for result in knowledge_service.search(query, limit):
+        decision = inspect_user_input(str(result.get("content", "")))
+        if decision.category == "prompt_injection":
+            continue
+        safe_result = dict(result)
+        safe_result["content"] = decision.sanitized_text
+        safe_results.append(safe_result)
+    return json.dumps(safe_results, ensure_ascii=False)

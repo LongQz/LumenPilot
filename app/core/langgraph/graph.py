@@ -12,13 +12,14 @@ from urllib.parse import quote_plus
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
+    HumanMessage,
     convert_to_openai_messages,
 )
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.errors import GraphInterrupt
 from langgraph.graph import (
+    END,
     StateGraph,
 )
 from langchain_core.runnables.config import RunnableConfig
@@ -26,10 +27,7 @@ from langgraph.graph.state import (
     Command,
     CompiledStateGraph,
 )
-from langgraph.prebuilt import (
-    ToolNode,
-    tools_condition,
-)
+from langgraph.prebuilt import ToolNode
 from langgraph.types import (
     RetryPolicy,
     StateSnapshot,
@@ -45,15 +43,28 @@ from psycopg.rows import (
 from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import settings
+from app.core.ai_safety import (
+    audit_event,
+    inspect_user_input,
+    latest_user_text,
+    redact_sensitive,
+    response_quality_issues,
+    validate_tool_calls,
+)
 from app.core.langgraph.tools import tools
 from app.core.logging import logger
-from app.core.metrics import llm_inference_duration_seconds
+from app.core.metrics import (
+    ai_safety_blocks_total,
+    llm_inference_duration_seconds,
+    reflection_outcomes_total,
+)
 from app.core.observability import langfuse_callback_handler
 from app.core.prompts import load_system_prompt
 from app.schemas import (
     GraphState,
     Message,
 )
+from app.schemas.chat import ReflectionTrace
 from app.services.llm import llm_service
 from app.services.memory import memory_service
 from app.utils import (
@@ -215,10 +226,23 @@ class LangGraphAgent:
         username = config.get("metadata", {}).get("username")
         thread_id = config.get("configurable", {}).get("thread_id")
         SYSTEM_PROMPT = load_system_prompt(username=username, long_term_memory=state["long_term_memory"])
+        if state.get("reflection_feedback"):
+            SYSTEM_PROMPT += (
+                "\n\n# Reflection correction\n"
+                "上一版回答未通过质量检查。必须根据以下反馈修正后重新回答：\n"
+                f"{state['reflection_feedback']}\n"
+                "不要解释 Reflection 过程，直接给出修正后的最终结论。"
+            )
 
         # 系统提示词在每一轮重建，但历史消息保留工具调用与工具结果，
         # 这样模型可以基于当前任务的真实数据继续推理。
-        messages = prepare_messages(state["messages"], SYSTEM_PROMPT)
+        safe_history = [
+            HumanMessage(content=redact_sensitive(str(message.content)), id=message.id)
+            if isinstance(message, HumanMessage)
+            else message
+            for message in state["messages"]
+        ]
+        messages = prepare_messages(safe_history, SYSTEM_PROMPT)
         logger.debug(
             "agent_messages_prepared",
             session_id=thread_id,
@@ -252,6 +276,142 @@ class LangGraphAgent:
             )
             raise Exception(f"failed to get llm response after trying all models: {str(e)}")
 
+    async def _input_guard(self, state: GraphState, config: RunnableConfig) -> dict:
+        """Reject prompt injection before any model or tool call."""
+        user_text = latest_user_text(state["messages"])
+        decision = inspect_user_input(user_text)
+        session_id = config.get("configurable", {}).get("thread_id")
+        audit_event(
+            "input_checked",
+            session_id=session_id,
+            user_text=user_text,
+            category=decision.category,
+            reason=decision.reason,
+        )
+        if not decision.allowed:
+            ai_safety_blocks_total.labels(stage="input", category=decision.category).inc()
+            return {
+                "messages": [
+                    AIMessage(
+                        content=("已阻止本次请求：检测到提示词注入或越权指令。请改为正常的 LumaFeed 运营分析问题。")
+                    )
+                ],
+                "safe_user_input": "",
+                "safety_blocked": True,
+                "reflection_count": 0,
+                "reflection_feedback": "",
+                "reflection_status": "not_run",
+                "reflection_reason": "输入安全门已拦截，未执行回答质量检查",
+            }
+        return {
+            "safe_user_input": decision.sanitized_text,
+            "safety_blocked": False,
+            "reflection_count": 0,
+            "reflection_feedback": "",
+            "reflection_status": "not_run",
+            "reflection_reason": "",
+        }
+
+    async def _tool_guard(self, state: GraphState, config: RunnableConfig) -> dict:
+        """Validate model-selected tools before ToolNode executes them."""
+        last_message = state["messages"][-1]
+        tool_calls = getattr(last_message, "tool_calls", []) or []
+        user_text = latest_user_text(state["messages"])
+        allowed, reason = validate_tool_calls(tool_calls, user_text)
+        session_id = config.get("configurable", {}).get("thread_id")
+        audit_event(
+            "tool_calls_checked",
+            session_id=session_id,
+            user_text=user_text,
+            category="allowed" if allowed else "tool_blocked",
+            reason=reason,
+        )
+        if allowed:
+            return {"safety_blocked": False}
+        ai_safety_blocks_total.labels(stage="tool", category="tool_policy").inc()
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "已阻止一次不符合权限边界的工具调用。"
+                        f"原因：{reason}。请调整为只读分析或明确提出需要人工确认的操作。"
+                    )
+                )
+            ],
+            "safety_blocked": True,
+            "reflection_feedback": "",
+            "reflection_status": "not_run",
+            "reflection_reason": "工具安全门已拦截，未执行回答质量检查",
+        }
+
+    async def _reflection(self, state: GraphState, config: RunnableConfig) -> dict:
+        """Run one deterministic Reflexion-style quality evaluation and optional retry."""
+        user_text = latest_user_text(state["messages"])
+        issues = response_quality_issues(state["messages"], user_text)
+        reflection_count = int(state.get("reflection_count", 0))
+        session_id = config.get("configurable", {}).get("thread_id")
+        if issues and reflection_count < 1:
+            reflection_outcomes_total.labels(outcome="retry").inc()
+            audit_event(
+                "reflection_retry",
+                session_id=session_id,
+                user_text=user_text,
+                category="quality",
+                reason="; ".join(issues),
+            )
+            return {
+                "reflection_count": reflection_count + 1,
+                "reflection_feedback": "; ".join(issues),
+                "reflection_status": "retry",
+                "reflection_reason": "; ".join(issues),
+            }
+        if issues:
+            reflection_outcomes_total.labels(outcome="unresolved").inc()
+            audit_event(
+                "reflection_unresolved",
+                session_id=session_id,
+                user_text=user_text,
+                category="quality",
+                reason="; ".join(issues),
+            )
+            return {
+                "reflection_feedback": "",
+                "reflection_status": "unresolved",
+                "reflection_reason": "; ".join(issues),
+            }
+        else:
+            outcome = "corrected" if reflection_count > 0 else "passed"
+            reflection_outcomes_total.labels(outcome=outcome).inc()
+            audit_event(
+                f"reflection_{outcome}",
+                session_id=session_id,
+                user_text=user_text,
+                category="quality",
+            )
+        return {
+            "reflection_feedback": "",
+            "reflection_status": "corrected" if reflection_count > 0 else "passed",
+            "reflection_reason": state.get("reflection_reason", "") if reflection_count > 0 else "",
+        }
+
+    def _route_after_input_guard(self, state: GraphState) -> str:
+        """Route blocked input directly to the end."""
+        return END if state.get("safety_blocked") else "chat"
+
+    def _route_after_chat(self, state: GraphState) -> str:
+        """Route tool calls through the guard; final answers through Reflection."""
+        last_message = state["messages"][-1]
+        tool_calls = getattr(last_message, "tool_calls", []) or []
+        return "tool_guard" if tool_calls else "reflection"
+
+    def _route_after_tool_guard(self, state: GraphState) -> str:
+        """Execute allowed tools or end when the guard rejected the batch."""
+        return END if state.get("safety_blocked") else "tools"
+
+    def _route_after_reflection(self, state: GraphState) -> str:
+        """Retry once with Reflection feedback; otherwise finish."""
+        return "chat" if state.get("reflection_feedback") else END
+
     async def create_graph(self) -> CompiledStateGraph:
         """Create and configure the LangGraph workflow.
 
@@ -264,16 +424,37 @@ class LangGraphAgent:
         if self._graph is None:
             try:
                 graph_builder = StateGraph(GraphState)
+                graph_builder.add_node("input_guard", self._input_guard)
                 graph_builder.add_node("chat", self._chat)
+                graph_builder.add_node("tool_guard", self._tool_guard)
                 graph_builder.add_node(
                     "tools",
                     ToolNode(tools),
                     retry_policy=RetryPolicy(max_attempts=3),
                 )
-                graph_builder.set_entry_point("chat")
-                graph_builder.add_conditional_edges("chat", tools_condition)
+                graph_builder.add_node("reflection", self._reflection)
+                graph_builder.set_entry_point("input_guard")
+                graph_builder.add_conditional_edges(
+                    "input_guard",
+                    self._route_after_input_guard,
+                    {"chat": "chat", END: END},
+                )
+                graph_builder.add_conditional_edges(
+                    "chat",
+                    self._route_after_chat,
+                    {"tool_guard": "tool_guard", "reflection": "reflection"},
+                )
+                graph_builder.add_conditional_edges(
+                    "tool_guard",
+                    self._route_after_tool_guard,
+                    {"tools": "tools", END: END},
+                )
                 graph_builder.add_edge("tools", "chat")
-                graph_builder.set_finish_point("chat")
+                graph_builder.add_conditional_edges(
+                    "reflection",
+                    self._route_after_reflection,
+                    {"chat": "chat", END: END},
+                )
 
                 # Raises if the pool cannot be created — no checkpointer, no service.
                 # checkpoint 是人工确认和会话恢复的唯一状态来源，不能用内存缓存替代。
@@ -315,7 +496,7 @@ class LangGraphAgent:
         session_id: str,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
-    ) -> list[Message]:
+    ) -> tuple[list[Message], ReflectionTrace]:
         """Get a response from the LLM.
 
         Args:
@@ -351,15 +532,47 @@ class LangGraphAgent:
 
             if state.next:
                 # 上一次执行被 interrupt 暂停，本次用户输入作为恢复值，继续原图。
+                resume_text = messages[-1].content
+                resume_decision = inspect_user_input(resume_text)
+                if not resume_decision.allowed:
+                    audit_event(
+                        "resume_input_blocked",
+                        session_id=session_id,
+                        user_text=resume_text,
+                        category=resume_decision.category,
+                        reason=resume_decision.reason,
+                    )
+                    return [
+                        Message(
+                            role="assistant",
+                            content=(
+                                "已阻止本次确认操作：输入中包含越权或注入指令。"
+                                "如需创建任务，请只回复“确认创建”或说明修改内容。"
+                            ),
+                        )
+                    ], ReflectionTrace(
+                        status="not_run",
+                        attempts=0,
+                        reason="确认输入被安全门拦截，未执行回答质量检查",
+                    )
                 logger.info("resuming_interrupted_graph", session_id=session_id, next_nodes=state.next)
                 response = await graph.ainvoke(
-                    Command(resume=messages[-1].content),
+                    Command(resume=resume_decision.sanitized_text),
                     config=config,
                 )
             else:
                 relevant_memory = relevant_memory or "No relevant memory found."
                 response = await graph.ainvoke(
-                    input={"messages": dump_messages(messages), "long_term_memory": relevant_memory},
+                    input={
+                        "messages": dump_messages(messages),
+                        "long_term_memory": relevant_memory,
+                        "safe_user_input": "",
+                        "safety_blocked": False,
+                        "reflection_count": 0,
+                        "reflection_feedback": "",
+                        "reflection_status": "not_run",
+                        "reflection_reason": "",
+                    },
                     config=config,
                 )
 
@@ -369,15 +582,26 @@ class LangGraphAgent:
                 # Tool 内部 interrupt 后，图会停在这里等待下一次用户消息。
                 interrupt_value = state.tasks[0].interrupts[0].value if state.tasks else "Waiting for input."
                 logger.info("graph_interrupted", session_id=session_id, interrupt_value=str(interrupt_value))
-                return [Message(role="assistant", content=str(interrupt_value))]
+                return [Message(role="assistant", content=str(interrupt_value))], ReflectionTrace(
+                    status="not_run",
+                    attempts=int(response.get("reflection_count", 0)),
+                    reason="等待人工确认，尚未执行回答质量检查",
+                )
 
             create_background_task(memory_service.add(user_id, response["messages"]))
-            return self.__process_messages(response["messages"])
+            return self.__process_messages(response["messages"]), ReflectionTrace(
+                status=response.get("reflection_status", "not_run"),
+                attempts=int(response.get("reflection_count", 0)),
+                reason=response.get("reflection_reason", ""),
+            )
         except GraphInterrupt:
             state = await graph.aget_state(config)
             interrupt_value = state.tasks[0].interrupts[0].value if state.tasks else "Waiting for input."
             logger.info("graph_interrupted", session_id=session_id, interrupt_value=str(interrupt_value))
-            return [Message(role="assistant", content=str(interrupt_value))]
+            return [Message(role="assistant", content=str(interrupt_value))], ReflectionTrace(
+                status="not_run",
+                reason="等待人工确认，尚未执行回答质量检查",
+            )
         except Exception as e:
             logger.exception("get_response_failed", error=str(e), session_id=session_id)
             raise
@@ -423,22 +647,45 @@ class LangGraphAgent:
 
             if state.next:
                 logger.info("resuming_interrupted_graph_stream", session_id=session_id, next_nodes=state.next)
-                graph_input = Command(resume=messages[-1].content)
+                resume_text = messages[-1].content
+                resume_decision = inspect_user_input(resume_text)
+                if not resume_decision.allowed:
+                    audit_event(
+                        "resume_input_blocked_stream",
+                        session_id=session_id,
+                        user_text=resume_text,
+                        category=resume_decision.category,
+                        reason=resume_decision.reason,
+                    )
+                    yield (
+                        "已阻止本次确认操作：输入中包含越权或注入指令。"
+                        "如需创建任务，请只回复“确认创建”或说明修改内容。"
+                    )
+                    return
+                graph_input = Command(resume=resume_decision.sanitized_text)
             else:
                 relevant_memory = relevant_memory or "No relevant memory found."
-                graph_input = {"messages": dump_messages(messages), "long_term_memory": relevant_memory}
+                graph_input = {
+                    "messages": dump_messages(messages),
+                    "long_term_memory": relevant_memory,
+                    "safe_user_input": "",
+                    "safety_blocked": False,
+                    "reflection_count": 0,
+                    "reflection_feedback": "",
+                    "reflection_status": "not_run",
+                    "reflection_reason": "",
+                }
 
-            async for token, _ in graph.astream(
+            # 流式端点不能逐 token 直接下发：密钥或手机号可能跨多个 token，
+            # Reflection 也可能重试并产生一份应丢弃的草稿。这里执行完整图后，
+            # 只输出经 Reflection 选中的最终回答，并统一脱敏。
+            async for _token, _metadata in graph.astream(
                 graph_input,
                 config,
                 stream_mode="messages",
             ):
-                if not isinstance(token, (AIMessage, AIMessageChunk)):
-                    continue
-
-                text = extract_text_content(token.content)
-                if text:
-                    yield text
+                # 图的副作用和工具调用仍需执行，但安全响应在最终状态确定后输出。
+                pass
 
             # After streaming completes, check for interrupt or update memory
             state = await graph.aget_state(config)
@@ -447,6 +694,17 @@ class LangGraphAgent:
                 logger.info("graph_interrupted_stream", session_id=session_id, interrupt_value=str(interrupt_value))
                 yield str(interrupt_value)
             elif state.values and "messages" in state.values:
+                final_answer = ""
+                for message in reversed(state.values["messages"]):
+                    if (
+                        isinstance(message, AIMessage)
+                        and not getattr(message, "tool_calls", None)
+                        and message.content
+                    ):
+                        final_answer = extract_text_content(message.content)
+                        break
+                if final_answer:
+                    yield redact_sensitive(final_answer)
                 create_background_task(memory_service.add(user_id, state.values["messages"]))
         except GraphInterrupt:
             state = await graph.aget_state(config)
@@ -477,7 +735,7 @@ class LangGraphAgent:
         openai_style_messages = convert_to_openai_messages(messages)
         # keep just assistant and user messages
         return [
-            Message(role=message["role"], content=str(message["content"]))
+            Message(role=message["role"], content=redact_sensitive(str(message["content"])))
             for message in openai_style_messages
             if message["role"] in ["assistant", "user"] and message["content"]
         ]

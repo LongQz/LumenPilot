@@ -40,6 +40,18 @@ session_names_generated_total = Counter(
     ["status"],  # "success" | "error"
 )
 
+ai_safety_blocks_total = Counter(
+    "ai_safety_blocks_total",
+    "Total model or tool requests blocked by deterministic safety policy",
+    ["stage", "category"],
+)
+
+reflection_outcomes_total = Counter(
+    "reflection_outcomes_total",
+    "Reflection quality-gate outcomes",
+    ["outcome"],
+)
+
 
 def setup_metrics(app):
     """Set up Prometheus metrics middleware and endpoints.
