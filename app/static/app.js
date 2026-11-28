@@ -150,7 +150,34 @@ async function checkHealth() {
   }
 }
 
-function appendMessage(role, content, extraClass = "") {
+function renderReflectionTrace(trace) {
+  if (!trace) return "";
+  const labels = {
+    passed: "质量检查通过",
+    corrected: `已自动修正 ${trace.attempts || 1} 次`,
+    unresolved: "质量检查未通过",
+    retry: "正在按质量反馈修正",
+    not_run: "质量检查未执行"
+  };
+  const icons = {
+    passed: "✓",
+    corrected: "↻",
+    unresolved: "!",
+    retry: "↻",
+    not_run: "–"
+  };
+  const status = labels[trace.status] ? trace.status : "not_run";
+  const reason = trace.reason
+    ? `<small>${escapeHtml(trace.reason)}</small>`
+    : "";
+  return `
+    <div class="reflection-badge ${status}">
+      <b><i>${icons[status]}</i>${labels[status]}</b>
+      ${reason}
+    </div>`;
+}
+
+function appendMessage(role, content, extraClass = "", reflection = null) {
   const article = document.createElement("article");
   article.className = `message ${role} ${extraClass}`.trim();
   article.innerHTML = `
@@ -158,6 +185,7 @@ function appendMessage(role, content, extraClass = "") {
     <div class="message-body">
       <span>${role === "user" ? state.account?.username || "你" : "LumenPilot"}</span>
       <p>${escapeHtml(content)}</p>
+      ${role === "assistant" ? renderReflectionTrace(reflection) : ""}
     </div>`;
   $("#messageList").appendChild(article);
   $("#messageList").scrollTop = $("#messageList").scrollHeight;
@@ -180,7 +208,7 @@ async function sendMessage(content) {
     const assistantMessages = (data.messages || []).filter((message) => message.role === "assistant");
     const reply = assistantMessages.at(-1)?.content || "Agent 未返回文本结果";
     const pending = /确认|create_ops_task|question/i.test(reply);
-    appendMessage("assistant", reply, pending ? "pending" : "");
+    appendMessage("assistant", reply, pending ? "pending" : "", data.reflection);
   } catch (error) {
     loading.remove();
     appendMessage("assistant", `请求失败：${error.message}`, "pending");

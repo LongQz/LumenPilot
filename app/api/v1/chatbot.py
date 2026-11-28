@@ -54,13 +54,13 @@ async def chat(
         if settings.SESSION_NAMING_ENABLED:
             maybe_name_session(session.id, session.name, chat_request.messages)
 
-        result = await agent.get_response(
+        result, reflection = await agent.get_response(
             chat_request.messages, session.id, user_id=str(session.user_id), username=session.username
         )
 
         logger.info("chat_request_processed", session_id=session.id)
 
-        return ChatResponse(messages=result)
+        return ChatResponse(messages=result, reflection=reflection)
     except Exception as e:
         logger.exception("chat_request_failed", session_id=session.id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
