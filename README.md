@@ -1,6 +1,6 @@
 # LumenPilot
 
-[![Version](https://img.shields.io/badge/version-2.0.0-146b52)](docs/VERSION-2.md)
+[![Version](https://img.shields.io/badge/version-2.0.1-146b52)](docs/VERSION-2.md)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.121-009688)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.0-1c3c3c)](https://langchain-ai.github.io/langgraph/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169e1)](https://github.com/pgvector/pgvector)
@@ -9,7 +9,7 @@ LumenPilot 是面向 LumaFeed 本地生活内容平台的运营分析 Agent。�
 只读接口获取内容互动、热门笔记和商户口碑指标，结合 Embedding + pgvector
 运营知识检索生成带来源的分析，并在人工确认后创建运营任务。
 
-当前公开版本为 **v2.0.0**。第二版重点补上 Reflexion 风格质量门、Prompt
+当前公开版本为 **v2.0.1**。第二版重点补上 Reflexion 风格质量门、Prompt
 Injection 防护、工具权限和可视化质量结果，完整演进记录见
 [docs/VERSION-2.md](docs/VERSION-2.md)。
 
@@ -111,6 +111,9 @@ admin.qzh@lumafeed.local   / qzh
 admin.ops@lumafeed.local   / qzh
 admin.audit@lumafeed.local / qzh
 ```
+
+公开演示页面不直接展示账号昵称和完整邮箱：当前身份统一显示为“平台管理员”或
+“运营用户”，管理端账号表使用角色编号和脱敏邮箱，避免真实姓名进入截图或演示视频。
 
 账号数据保存在 LumaFeed 的 `lumafeed` MySQL 数据库，新建独立表
 `tb_lumenpilot_account`。PostgreSQL 继续负责会话、LangGraph checkpoint、

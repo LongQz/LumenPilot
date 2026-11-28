@@ -92,12 +92,33 @@ function renderSession() {
   $("#sessionShort").textContent = state.sessionId ? state.sessionId.slice(0, 8) : "尚未创建";
 }
 
+function displayAccountName(account) {
+  if (!account) return "访客";
+  return account.role === "ADMIN" ? "平台管理员" : "运营用户";
+}
+
+function displayAccountAvatar(account) {
+  if (!account) return "访";
+  return account.role === "ADMIN" ? "管" : "运";
+}
+
+function displayUserLabel(user, index) {
+  const suffix = String(index + 1).padStart(2, "0");
+  return user.role === "ADMIN" ? `管理员 ${suffix}` : `运营用户 ${suffix}`;
+}
+
+function maskEmail(email) {
+  const [local, domain] = String(email || "").split("@");
+  if (!local || !domain) return "***";
+  return `${local.slice(0, 1)}***@${domain}`;
+}
+
 function renderAccount() {
   const account = state.account;
   if (!account) return;
-  $("#accountName").textContent = account.username || account.email;
+  $("#accountName").textContent = displayAccountName(account);
   $("#accountRole").textContent = account.role;
-  $("#accountAvatar").textContent = (account.username || account.email || "U").slice(0, 1).toUpperCase();
+  $("#accountAvatar").textContent = displayAccountAvatar(account);
   $("#adminNav").classList.toggle("hidden", account.role !== "ADMIN");
 }
 
@@ -183,7 +204,7 @@ function appendMessage(role, content, extraClass = "", reflection = null) {
   article.innerHTML = `
     <div class="message-avatar">${role === "user" ? "ME" : "LP"}</div>
     <div class="message-body">
-      <span>${role === "user" ? state.account?.username || "你" : "LumenPilot"}</span>
+      <span>${role === "user" ? displayAccountName(state.account) : "LumenPilot"}</span>
       <p>${escapeHtml(content)}</p>
       ${role === "assistant" ? renderReflectionTrace(reflection) : ""}
     </div>`;
@@ -254,10 +275,10 @@ async function loadAdmin() {
 }
 
 function renderUsers(users) {
-  $("#userTableBody").innerHTML = users.map((user) => `
+  $("#userTableBody").innerHTML = users.map((user, index) => `
     <tr>
-      <td><b>${escapeHtml(user.username || "-")}</b></td>
-      <td>${escapeHtml(user.email)}</td>
+      <td><b>${escapeHtml(displayUserLabel(user, index))}</b></td>
+      <td>${escapeHtml(maskEmail(user.email))}</td>
       <td><span class="role-tag ${user.role === "ADMIN" ? "admin" : ""}">${escapeHtml(user.role)}</span></td>
       <td>${user.last_login_at ? escapeHtml(new Date(user.last_login_at).toLocaleString()) : "尚未登录"}</td>
     </tr>`).join("");

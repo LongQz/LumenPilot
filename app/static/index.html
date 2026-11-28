@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LumenPilot · 运营分析工作台</title>
-  <link rel="stylesheet" href="/console/styles.css?v=20261128-reflection">
+  <link rel="stylesheet" href="/console/styles.css?v=20261128-privacy">
 </head>
 <body>
   <div id="toast" class="toast" role="status"></div>
@@ -47,13 +47,13 @@
         </form>
         <form id="registerForm" class="auth-form hidden">
           <label>邮箱<input id="registerEmail" type="email" autocomplete="username" placeholder="name@company.com"></label>
-          <label>显示名称<input id="registerUsername" autocomplete="nickname" placeholder="例如：内容运营 qzh"></label>
+          <label>显示名称<input id="registerUsername" autocomplete="nickname" placeholder="例如：内容运营"></label>
           <label>密码<input id="registerPassword" type="password" autocomplete="new-password" placeholder="测试环境可填 qzh；生产需强密码"></label>
           <button class="button primary" type="submit">创建普通用户</button>
         </form>
         <p id="authError" class="form-error"></p>
         <div class="test-accounts">
-          <div><span>测试管理员</span><button type="button" data-test-email="admin.qzh@lumafeed.local" data-test-password="qzh">秦子豪管理员</button></div>
+          <div><span>测试管理员</span><button type="button" data-test-email="admin.qzh@lumafeed.local" data-test-password="qzh">平台管理员</button></div>
           <div><span>运营管理员</span><button type="button" data-test-email="admin.ops@lumafeed.local" data-test-password="qzh">运营管理员</button></div>
           <div><span>审计管理员</span><button type="button" data-test-email="admin.audit@lumafeed.local" data-test-password="qzh">审计管理员</button></div>
         </div>
@@ -169,6 +169,6 @@
     </main>
   </div>
 
-  <script src="/console/app.js?v=20261128-reflection"></script>
+  <script src="/console/app.js?v=20261128-privacy"></script>
 </body>
 </html>
